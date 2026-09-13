@@ -6,8 +6,14 @@
  *  - 画面制御（showView, 各画面の初期化）
  */
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+// PDFライブラリが正しく読み込めなかった場合でも、
+// アプリの他のボタン（設定・問題生成・クイズ等）は動作し続けるようにする
+if (typeof pdfjsLib !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
+} else {
+  console.error("pdf.jsの読み込みに失敗しました。PDF取り込み機能が使えません。");
+}
 
 /* ---------------------------------------------------------
  * IndexedDB
