@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16232B">
+<title>CE Study AI</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <h1>CE Study AI</h1>
+  <button id="btn-settings" class="icon-btn" aria-label="設定">⚙</button>
+</header>
+
+<main id="view-root">
+
+  <!-- ホーム画面 -->
+  <section id="view-home" class="view">
+    <div class="section-block">
+      <h2>教材・過去問</h2>
+      <div class="btn-row">
+        <button id="btn-add-material" class="btn btn-primary">＋ 教材を追加</button>
+        <button id="btn-add-exam" class="btn btn-secondary">＋ 過去問を追加</button>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <div id="field-list" class="field-list">
+        <p class="empty-note">まだ登録された資料がありません。上のボタンからPDFを追加してください。</p>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h2>学習</h2>
+      <button id="btn-generate" class="btn btn-primary btn-full">📝 問題を作る</button>
+    </div>
+  </section>
+
+  <!-- PDF追加画面 -->
+  <section id="view-add" class="view hidden">
+    <button class="link-back" data-back>← 戻る</button>
+    <h2 id="add-title">資料を追加</h2>
+
+    <label class="field">
+      <span>分野</span>
+      <input type="text" id="add-field" list="field-options" placeholder="例：血液浄化">
+      <datalist id="field-options"></datalist>
+    </label>
+
+    <label class="field">
+      <span>タイトル</span>
+      <input type="text" id="add-doc-title" placeholder="例：血液浄化テキスト 第3版">
+    </label>
+
+    <label class="field">
+      <span>PDFファイル</span>
+      <input type="file" id="add-file" accept="application/pdf">
+    </label>
+
+    <p id="add-status" class="status-note"></p>
+
+    <button id="btn-add-confirm" class="btn btn-primary btn-full">取り込む</button>
+  </section>
+
+  <!-- 問題生成画面 -->
+  <section id="view-generate" class="view hidden">
+    <button class="link-back" data-back>← 戻る</button>
+    <h2>問題を作る</h2>
+
+    <label class="field">
+      <span>分野</span>
+      <select id="gen-field"></select>
+    </label>
+
+    <label class="field">
+      <span>問題数</span>
+      <input type="number" id="gen-count" value="5" min="1" max="20">
+    </label>
+
+    <label class="field checkbox-field">
+      <input type="checkbox" id="gen-include-past" checked>
+      <span>過去問を素材として含める</span>
+    </label>
+
+    <p id="gen-status" class="status-note"></p>
+
+    <button id="btn-generate-confirm" class="btn btn-primary btn-full">AIで生成する</button>
+  </section>
+
+  <!-- クイズ画面 -->
+  <section id="view-quiz" class="view hidden">
+    <button class="link-back" data-back>← ホームへ</button>
+    <p id="quiz-progress" class="quiz-progress"></p>
+
+    <div class="quiz-card">
+      <p id="quiz-question" class="quiz-question"></p>
+      <div id="quiz-choices" class="quiz-choices"></div>
+    </div>
+
+    <div id="quiz-result" class="quiz-result hidden">
+      <p id="quiz-result-label" class="quiz-result-label"></p>
+      <p id="quiz-explanation" class="quiz-explanation"></p>
+      <p id="quiz-source" class="quiz-source"></p>
+      <button id="btn-next-question" class="btn btn-primary btn-full">次の問題へ</button>
+    </div>
+  </section>
+
+  <!-- 設定画面 -->
+  <section id="view-settings" class="view hidden">
+    <button class="link-back" data-back>← 戻る</button>
+    <h2>設定</h2>
+
+    <label class="field">
+      <span>Gemini APIキー</span>
+      <input type="password" id="settings-api-key" placeholder="AIza...">
+    </label>
+    <p class="hint-note">キーはこの端末のブラウザ内にのみ保存され、外部には送信されません（問題生成時のみGoogleのAPIに送信されます）。</p>
+
+    <button id="btn-save-key" class="btn btn-primary btn-full">保存</button>
+  </section>
+
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
