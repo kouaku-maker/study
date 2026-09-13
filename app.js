@@ -8,11 +8,28 @@
 
 // PDFライブラリが正しく読み込めなかった場合でも、
 // アプリの他のボタン（設定・問題生成・クイズ等）は動作し続けるようにする
-if (typeof pdfjsLib !== "undefined") {
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
-} else {
-  console.error("pdf.jsの読み込みに失敗しました。PDF取り込み機能が使えません。");
+const PDF_WORKER_URL = "https://unpkg.com/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
+let pdfWorkerReadyPromise = null;
+
+// SafariはCDN上のWorkerスクリプトを直接読み込めないことがあるため、
+// 一度fetchで中身を取得し、同一オリジン扱いのBlob URLとして渡す
+function ensurePdfWorkerReady() {
+  if (pdfWorkerReadyPromise) return pdfWorkerReadyPromise;
+  pdfWorkerReadyPromise = (async () => {
+    if (typeof pdfjsLib === "undefined") {
+      throw new Error("pdf.jsの読み込みに失敗しました。ページを再読み込みしてください。");
+    }
+    try {
+      const res = await fetch(PDF_WORKER_URL);
+      const code = await res.text();
+      const blob = new Blob([code], { type: "application/javascript" });
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+    } catch (e) {
+      console.error("Workerのfetchに失敗、直接URLを使用します", e);
+      pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+    }
+  })();
+  return pdfWorkerReadyPromise;
 }
 
 /* ---------------------------------------------------------
@@ -102,6 +119,7 @@ async function saveApiKey(key) {
  * PDF処理：テキスト抽出（ページ単位）
  * --------------------------------------------------------- */
 async function extractPdfPages(file) {
+  await ensurePdfWorkerReady();
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const pages = [];
@@ -379,7 +397,7 @@ document.getElementById("btn-add-confirm").addEventListener("click", async () =>
     setTimeout(() => showView("home"), 600);
   } catch (e) {
     console.error(e);
-    statusEl.textContent = "PDFの読み込みに失敗しました。別のPDFでお試しください。";
+    statusEl.textContent = "PDFの読み込みに失敗しました：" + (e.message || "不明なエラー");
   }
 });
 
