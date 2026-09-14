@@ -139,7 +139,7 @@ async function extractPdfPages(file) {
  * generateQuestionsWithLocalAI(prompt) を実装し、
  * mode に応じて呼び分けるようにする。
  * --------------------------------------------------------- */
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3.6-flash";
 
 async function callGemini(apiKey, prompt) {
   const url =
