@@ -125,6 +125,14 @@ async function saveApiKey(key) {
   await dbPut("settings", { key: "geminiApiKey", value: key });
 }
 
+async function getGeminiModel() {
+  const row = await dbGet("settings", "geminiModel");
+  return row ? row.value : GEMINI_MODEL_DEFAULT;
+}
+async function saveGeminiModel(model) {
+  await dbPut("settings", { key: "geminiModel", value: model });
+}
+
 /* ---------------------------------------------------------
  * PDF処理：テキスト抽出（ページ単位）
  * --------------------------------------------------------- */
@@ -149,11 +157,12 @@ async function extractPdfPages(file) {
  * generateQuestionsWithLocalAI(prompt) を実装し、
  * mode に応じて呼び分けるようにする。
  * --------------------------------------------------------- */
-const GEMINI_MODEL = "gemini-3.6-flash";
+const GEMINI_MODEL_DEFAULT = "gemini-3.6-flash";
 
-async function callGemini(apiKey, prompt) {
+async function callGemini(apiKey, prompt, retriesLeft = 2) {
+  const model = await getGeminiModel();
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
@@ -166,8 +175,21 @@ async function callGemini(apiKey, prompt) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+
+  if (res.status === 429 && retriesLeft > 0) {
+    // 1分あたりの回数制限（RPM）による一時的な混雑の可能性があるため、
+    // 少し待ってから自動的に再試行する
+    await new Promise((r) => setTimeout(r, 20000));
+    return callGemini(apiKey, prompt, retriesLeft - 1);
+  }
+
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
+    if (res.status === 429) {
+      throw new Error(
+        "Gemini APIの利用上限（無料枠）に達しました。1日あたりの上限の場合は日付が変わるまで待つ必要があります。しばらく時間をおいてから、もう一度お試しください。"
+      );
+    }
     throw new Error(`Gemini APIエラー (${res.status}): ${errText.slice(0, 300)}`);
   }
   const data = await res.json();
@@ -379,12 +401,15 @@ document.querySelectorAll("[data-back]").forEach((btn) => {
 
 document.getElementById("btn-settings").addEventListener("click", async () => {
   document.getElementById("settings-api-key").value = await getApiKey();
+  document.getElementById("settings-model").value = await getGeminiModel();
   showView("settings");
 });
 
 document.getElementById("btn-save-key").addEventListener("click", async () => {
   const key = document.getElementById("settings-api-key").value.trim();
+  const model = document.getElementById("settings-model").value;
   await saveApiKey(key);
+  await saveGeminiModel(model);
   showView("home");
 });
 
@@ -682,7 +707,7 @@ document.getElementById("btn-generate-confirm").addEventListener("click", async 
   const statusEl = document.getElementById("gen-status");
   const btn = document.getElementById("btn-generate-confirm");
 
-  statusEl.textContent = "AIが問題を作成し、品質チェック中…（1分ほどかかることがあります）";
+  statusEl.textContent = "AIが問題を作成し、品質チェック中…（混雑時は自動で少し待って再試行するため、最大2分ほどかかることがあります）";
   btn.disabled = true;
   try {
     const questions = await generateQuestions({ field, count, includePast });
