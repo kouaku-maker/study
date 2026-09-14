@@ -267,7 +267,7 @@ function attachSourceExcerpt(q, entries) {
  * 通信エラー等でチェック自体が失敗した場合は、出典実在チェック済みのリストをそのまま返す
  * （品質チェックが動かないことでMVPが完全に止まらないようにするため） */
 async function verifyQuestions(apiKey, questions, entries) {
-  if (questions.length === 0) return questions;
+  if (questions.length === 0) return { passed: questions, rejectedReasons: [] };
 
   const items = questions.map((q, i) => ({
     index: i,
@@ -279,12 +279,12 @@ async function verifyQuestions(apiKey, questions, entries) {
 
   const prompt = `以下は自動生成された臨床工学技士試験対策の4択問題です。各問題について、添えられた「根拠原文」の内容と、問題文・正解・解説が事実として矛盾していないかを確認してください。
 
-判定基準：
-- 根拠原文に書かれていない事実を、問題文や解説が勝手に付け加えている → ng
-- 根拠原文の内容と、正解や解説が医学的に矛盾している → ng
-- 根拠原文の内容の範囲内で、正しく出題・解説できている → ok
+判定基準（重要）：
+- 根拠原文に書かれている内容の範囲で、一般的な臨床工学の常識を使って説明を補っているだけなら ok とする（厳しくしすぎない）。
+- ng とするのは、根拠原文に書かれていない具体的な数値・固有名詞・手順を勝手に作り出している場合や、根拠原文の内容と明確に矛盾する場合のみ。
+- 判断に迷う場合は ok とする。
 
-出力は次のJSON配列の形式のみ。説明文やマークダウンは一切付けない。
+出力は次のJSON配列の形式のみ。ok の値は必ず true または false のブール値にすること。説明文やマークダウンは一切付けない。
 
 [
   { "index": 0, "ok": true, "reason": "簡潔な理由" }
@@ -297,14 +297,19 @@ ${JSON.stringify(items, null, 0)}
 
   try {
     const rawText = await callGemini(apiKey, prompt);
-    const results = JSON.parse(rawText);
-    const okIndexes = new Set(
-      (results || []).filter((r) => r && r.ok === true).map((r) => r.index)
-    );
-    return questions.filter((_, i) => okIndexes.has(i));
+    const results = JSON.parse(rawText) || [];
+    const isOk = (v) => v === true || v === "true" || v === 1;
+    const okIndexes = new Set(results.filter((r) => r && isOk(r.ok)).map((r) => Number(r.index)));
+    const passed = questions.filter((_, i) => okIndexes.has(i));
+    const rejectedReasons = results
+      .filter((r) => r && !isOk(r.ok))
+      .map((r) => r.reason)
+      .filter(Boolean)
+      .slice(0, 3);
+    return { passed, rejectedReasons };
   } catch (e) {
     console.error("整合性チェックに失敗したため、このステップをスキップします", e);
-    return questions;
+    return { passed: questions, rejectedReasons: [] };
   }
 }
 
@@ -336,13 +341,14 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("出典が確認できる問題を生成できませんでした。資料を増やして再度お試しください。");
   }
 
-  const verified = await verifyQuestions(apiKey, validated, entries);
-  if (verified.length === 0) {
-    throw new Error("品質チェックで内容の矛盾が見つかり、有効な問題がありませんでした。資料を増やすか、もう一度お試しください。");
+  const { passed, rejectedReasons } = await verifyQuestions(apiKey, validated, entries);
+  if (passed.length === 0) {
+    const reasonNote = rejectedReasons.length ? `（理由例：${rejectedReasons.join(" / ")}）` : "";
+    throw new Error(`品質チェックで内容の矛盾が見つかり、有効な問題がありませんでした${reasonNote}`);
   }
 
   const saved = [];
-  for (const q of verified) {
+  for (const q of passed) {
     const record = { ...q, field, createdAt: new Date().toISOString() };
     const id = await dbAdd("questions", record);
     saved.push({ ...record, id });
