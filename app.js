@@ -198,26 +198,38 @@ async function callGemini(apiKey, prompt, retriesLeft = 2) {
 }
 
 /* 出典タグ付きの教材抜粋を作成する（プロンプトに埋め込む素材）
+ * 資料が多い場合、文字数上限(maxChars)ですべては渡しきれないため、
+ * 毎回同じ（先頭の）ページばかりが使われないよう、ページの順序をシャッフルしてから詰め込む。
  * entries には、後で「出典の中身と問題の内容が矛盾していないか」を
  * 照合するための { docTitle, label, text } を保持しておく */
 function buildSourceExcerpts(materialsForField, maxChars) {
-  let out = "";
-  const sourceLabels = [];
-  const entries = [];
+  const allPages = [];
   for (const m of materialsForField) {
     for (const p of m.pages) {
       if (!p.text) continue;
-      const label =
-        m.type === "past"
-          ? `[出典:${m.title} 問題頁${p.page}]`
-          : `[出典:${m.title} P.${p.page}]`;
-      const chunk = `${label} ${p.text}\n`;
-      if (out.length + chunk.length > maxChars) continue;
-      out += chunk;
-      const labelBody = label.slice(4, -1); // "出典:" と "]" を除いたラベル本体
-      sourceLabels.push(labelBody);
-      entries.push({ docTitle: m.title, page: p.page, label: labelBody, text: p.text });
+      allPages.push({ m, p });
     }
+  }
+  // Fisher-Yatesシャッフル
+  for (let i = allPages.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [allPages[i], allPages[j]] = [allPages[j], allPages[i]];
+  }
+
+  let out = "";
+  const sourceLabels = [];
+  const entries = [];
+  for (const { m, p } of allPages) {
+    const label =
+      m.type === "past"
+        ? `[出典:${m.title} 問題頁${p.page}]`
+        : `[出典:${m.title} P.${p.page}]`;
+    const chunk = `${label} ${p.text}\n`;
+    if (out.length + chunk.length > maxChars) continue;
+    out += chunk;
+    const labelBody = label.slice(4, -1); // "出典:" と "]" を除いたラベル本体
+    sourceLabels.push(labelBody);
+    entries.push({ docTitle: m.title, page: p.page, label: labelBody, text: p.text });
   }
   return { excerpts: out, sourceLabels, entries };
 }
