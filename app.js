@@ -175,12 +175,14 @@ async function callGemini(apiKey, prompt) {
   return text;
 }
 
-/* 出典タグ付きの教材抜粋を作成する（プロンプトに埋め込む素材） */
+/* 出典タグ付きの教材抜粋を作成する（プロンプトに埋め込む素材）
+ * entries には、後で「出典の中身と問題の内容が矛盾していないか」を
+ * 照合するための { docTitle, label, text } を保持しておく */
 function buildSourceExcerpts(materialsForField, maxChars) {
   let out = "";
   const sourceLabels = [];
+  const entries = [];
   for (const m of materialsForField) {
-    const kindLabel = m.type === "past" ? "過去問" : "教材";
     for (const p of m.pages) {
       if (!p.text) continue;
       const label =
@@ -190,10 +192,12 @@ function buildSourceExcerpts(materialsForField, maxChars) {
       const chunk = `${label} ${p.text}\n`;
       if (out.length + chunk.length > maxChars) continue;
       out += chunk;
-      sourceLabels.push(label.slice(4, -1)); // "出典:" と "]" を除いたラベル本体
+      const labelBody = label.slice(4, -1); // "出典:" と "]" を除いたラベル本体
+      sourceLabels.push(labelBody);
+      entries.push({ docTitle: m.title, label: labelBody, text: p.text });
     }
   }
-  return { excerpts: out, sourceLabels };
+  return { excerpts: out, sourceLabels, entries };
 }
 
 function buildPrompt({ field, count, excerpts, includePast }) {
@@ -249,6 +253,61 @@ function validateQuestions(rawQuestions, validSourceLabels) {
   return valid;
 }
 
+/* 問題ごとに、根拠となった出典の本文（原文）を探して付与する */
+function attachSourceExcerpt(q, entries) {
+  const matched = entries.filter((e) => q.source.includes(e.docTitle.split(" ")[0]));
+  const text = matched
+    .map((e) => e.text)
+    .join("\n")
+    .slice(0, 3000); // 検証プロンプトが長くなりすぎないよう上限を設ける
+  return text || "(該当する原文が見つかりませんでした)";
+}
+
+/* AIによる整合性チェック：出典本文と問題内容が食い違っていないかを再度AIに確認させる。
+ * 通信エラー等でチェック自体が失敗した場合は、出典実在チェック済みのリストをそのまま返す
+ * （品質チェックが動かないことでMVPが完全に止まらないようにするため） */
+async function verifyQuestions(apiKey, questions, entries) {
+  if (questions.length === 0) return questions;
+
+  const items = questions.map((q, i) => ({
+    index: i,
+    question: q.question,
+    correctChoice: q.choices[q.answerIndex],
+    explanation: q.explanation,
+    sourceExcerpt: attachSourceExcerpt(q, entries)
+  }));
+
+  const prompt = `以下は自動生成された臨床工学技士試験対策の4択問題です。各問題について、添えられた「根拠原文」の内容と、問題文・正解・解説が事実として矛盾していないかを確認してください。
+
+判定基準：
+- 根拠原文に書かれていない事実を、問題文や解説が勝手に付け加えている → ng
+- 根拠原文の内容と、正解や解説が医学的に矛盾している → ng
+- 根拠原文の内容の範囲内で、正しく出題・解説できている → ok
+
+出力は次のJSON配列の形式のみ。説明文やマークダウンは一切付けない。
+
+[
+  { "index": 0, "ok": true, "reason": "簡潔な理由" }
+]
+
+--- チェック対象 ---
+${JSON.stringify(items, null, 0)}
+--- チェック対象ここまで ---
+`;
+
+  try {
+    const rawText = await callGemini(apiKey, prompt);
+    const results = JSON.parse(rawText);
+    const okIndexes = new Set(
+      (results || []).filter((r) => r && r.ok === true).map((r) => r.index)
+    );
+    return questions.filter((_, i) => okIndexes.has(i));
+  } catch (e) {
+    console.error("整合性チェックに失敗したため、このステップをスキップします", e);
+    return questions;
+  }
+}
+
 async function generateQuestions({ field, count, includePast }) {
   const apiKey = await getApiKey();
   if (!apiKey) throw new Error("設定画面でGemini APIキーを登録してください。");
@@ -261,7 +320,7 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("この分野に登録された資料がありません。");
   }
 
-  const { excerpts, sourceLabels } = buildSourceExcerpts(materialsForField, 60000);
+  const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, 60000);
   const prompt = buildPrompt({ field, count, excerpts, includePast });
   const rawText = await callGemini(apiKey, prompt);
 
@@ -277,8 +336,13 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("出典が確認できる問題を生成できませんでした。資料を増やして再度お試しください。");
   }
 
+  const verified = await verifyQuestions(apiKey, validated, entries);
+  if (verified.length === 0) {
+    throw new Error("品質チェックで内容の矛盾が見つかり、有効な問題がありませんでした。資料を増やすか、もう一度お試しください。");
+  }
+
   const saved = [];
-  for (const q of validated) {
+  for (const q of verified) {
     const record = { ...q, field, createdAt: new Date().toISOString() };
     const id = await dbAdd("questions", record);
     saved.push({ ...record, id });
@@ -487,7 +551,7 @@ document.getElementById("btn-generate-confirm").addEventListener("click", async 
   const statusEl = document.getElementById("gen-status");
   const btn = document.getElementById("btn-generate-confirm");
 
-  statusEl.textContent = "AIが問題を作成中…（数十秒かかることがあります）";
+  statusEl.textContent = "AIが問題を作成し、品質チェック中…（1分ほどかかることがあります）";
   btn.disabled = true;
   try {
     const questions = await generateQuestions({ field, count, includePast });
