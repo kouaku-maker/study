@@ -36,7 +36,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 20px 14px;
+  padding: calc(18px + env(safe-area-inset-top, 0px)) 20px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
   position: sticky;
