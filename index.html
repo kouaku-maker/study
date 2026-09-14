@@ -37,6 +37,7 @@
     <div class="section-block">
       <h2>学習</h2>
       <button id="btn-generate" class="btn btn-primary btn-full">📝 問題を作る</button>
+      <button id="btn-history" class="btn btn-secondary btn-full btn-spaced">📊 学習履歴</button>
     </div>
   </section>
 
@@ -106,6 +107,19 @@
       <p id="quiz-explanation" class="quiz-explanation"></p>
       <p id="quiz-source" class="quiz-source"></p>
       <button id="btn-next-question" class="btn btn-primary btn-full">次の問題へ</button>
+    </div>
+  </section>
+
+  <!-- 学習履歴画面 -->
+  <section id="view-history" class="view hidden">
+    <button class="link-back" data-back>← 戻る</button>
+    <h2>学習履歴</h2>
+
+    <div class="history-summary" id="history-summary"></div>
+
+    <div class="section-block">
+      <h2>分野別正答率</h2>
+      <div id="history-field-list" class="history-field-list"></div>
     </div>
   </section>
 

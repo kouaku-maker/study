@@ -194,7 +194,7 @@ function buildSourceExcerpts(materialsForField, maxChars) {
       out += chunk;
       const labelBody = label.slice(4, -1); // "出典:" と "]" を除いたラベル本体
       sourceLabels.push(labelBody);
-      entries.push({ docTitle: m.title, label: labelBody, text: p.text });
+      entries.push({ docTitle: m.title, page: p.page, label: labelBody, text: p.text });
     }
   }
   return { excerpts: out, sourceLabels, entries };
@@ -253,13 +253,20 @@ function validateQuestions(rawQuestions, validSourceLabels) {
   return valid;
 }
 
-/* 問題ごとに、根拠となった出典の本文（原文）を探して付与する */
+/* 問題ごとに、根拠となった出典の本文（原文）を探して付与する。
+ * まず出典表記からページ番号を読み取り、そのページの原文を優先的に使う。
+ * ページ番号が読み取れない場合のみ、同じ資料名の中身をまとめて渡す（フォールバック）。 */
 function attachSourceExcerpt(q, entries) {
-  const matched = entries.filter((e) => q.source.includes(e.docTitle.split(" ")[0]));
-  const text = matched
-    .map((e) => e.text)
-    .join("\n")
-    .slice(0, 3000); // 検証プロンプトが長くなりすぎないよう上限を設ける
+  const pageMatch = q.source.match(/(?:P\.|頁)(\d+)/);
+  const docMatches = entries.filter((e) => q.source.includes(e.docTitle.split(" ")[0]));
+
+  if (pageMatch) {
+    const pageNum = Number(pageMatch[1]);
+    const exact = docMatches.find((e) => e.page === pageNum);
+    if (exact) return exact.text.slice(0, 4000);
+  }
+
+  const text = docMatches.map((e) => e.text).join("\n").slice(0, 4000);
   return text || "(該当する原文が見つかりませんでした)";
 }
 
@@ -359,7 +366,7 @@ async function generateQuestions({ field, count, includePast }) {
 /* ---------------------------------------------------------
  * 画面制御
  * --------------------------------------------------------- */
-const views = ["home", "add", "generate", "quiz", "settings", "materials"];
+const views = ["home", "add", "generate", "quiz", "settings", "materials", "history"];
 function showView(name) {
   for (const v of views) {
     document.getElementById(`view-${v}`).classList.toggle("hidden", v !== name);
@@ -434,6 +441,70 @@ document.getElementById("field-list").addEventListener("click", (e) => {
   if (!group) return;
   openMaterialsView(group.dataset.field);
 });
+
+document.getElementById("btn-history").addEventListener("click", async () => {
+  await renderHistory();
+  showView("history");
+});
+
+async function renderHistory() {
+  const attempts = await dbGetAll("attempts");
+  const questions = await dbGetAll("questions");
+  const qMap = new Map(questions.map((q) => [q.id, q]));
+
+  const byField = {};
+  let totalCorrect = 0;
+  let total = 0;
+
+  for (const a of attempts) {
+    const q = qMap.get(a.questionId);
+    const field = q ? q.field : "不明";
+    byField[field] = byField[field] || { correct: 0, total: 0 };
+    byField[field].total++;
+    if (a.correct) byField[field].correct++;
+    total++;
+    if (a.correct) totalCorrect++;
+  }
+
+  const summaryEl = document.getElementById("history-summary");
+  const overallRate = total > 0 ? Math.round((totalCorrect / total) * 100) : 0;
+  summaryEl.innerHTML = `
+    <div class="stat">
+      <div class="stat-value">${total}</div>
+      <div class="stat-label">総回答数</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">${totalCorrect}</div>
+      <div class="stat-label">総正解数</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">${overallRate}%</div>
+      <div class="stat-label">全体正答率</div>
+    </div>`;
+
+  const listEl = document.getElementById("history-field-list");
+  const fields = Object.entries(byField);
+  if (fields.length === 0) {
+    listEl.innerHTML = `<p class="empty-note">まだ回答履歴がありません。問題に回答すると、ここに分野別の正答率が表示されます。</p>`;
+    return;
+  }
+
+  listEl.innerHTML = fields
+    .map(([field, c]) => {
+      const rate = c.total > 0 ? Math.round((c.correct / c.total) * 100) : 0;
+      return `
+      <div class="history-field-row">
+        <div class="history-field-top">
+          <span>${escapeHtml(field)}</span>
+          <span class="history-field-rate">${c.correct}/${c.total}（${rate}%）</span>
+        </div>
+        <div class="history-bar-track">
+          <div class="history-bar-fill" style="width:${rate}%"></div>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
 
 /* --- 資料一覧（分野別）・削除 --- */
 async function openMaterialsView(field) {

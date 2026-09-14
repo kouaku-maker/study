@@ -101,6 +101,7 @@ h2 { font-size: 18px; margin: 4px 0 18px; }
 }
 
 .btn-full { width: 100%; }
+.btn-spaced { margin-top: 10px; }
 
 .btn-primary {
   background: var(--accent);
@@ -204,6 +205,69 @@ h2 { font-size: 18px; margin: 4px 0 18px; }
   font-size: 13px;
   color: var(--muted);
   padding: 8px 2px;
+}
+
+.history-summary {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.history-summary .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.history-summary .stat-value {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.history-summary .stat-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.history-field-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-field-row {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.history-field-row .history-field-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.history-field-row .history-field-rate {
+  color: var(--accent-dark);
+}
+
+.history-bar-track {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.history-bar-fill {
+  height: 100%;
+  background: var(--accent);
 }
 
 .link-back {
