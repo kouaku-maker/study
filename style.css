@@ -135,7 +135,12 @@ h2 { font-size: 18px; margin: 4px 0 18px; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
+.field-group:active { background: var(--accent-soft); }
 
 .field-group .field-title {
   font-weight: 700;
@@ -146,6 +151,59 @@ h2 { font-size: 18px; margin: 4px 0 18px; }
 .field-group .field-counts {
   font-size: 13px;
   color: var(--muted);
+}
+
+.field-group .chevron {
+  color: var(--muted);
+  font-size: 16px;
+  padding-left: 10px;
+}
+
+.material-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.material-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.material-item .material-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.material-item .material-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.material-item .material-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.material-delete-btn {
+  border: none;
+  background: none;
+  color: var(--wrong);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 8px;
+}
+
+.material-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 2px;
 }
 
 .link-back {

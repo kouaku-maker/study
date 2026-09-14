@@ -94,6 +94,16 @@ async function dbGetAll(store) {
   });
 }
 
+async function dbDelete(store, key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    const req = tx.objectStore(store).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
 async function dbGet(store, key) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -279,7 +289,7 @@ async function generateQuestions({ field, count, includePast }) {
 /* ---------------------------------------------------------
  * 画面制御
  * --------------------------------------------------------- */
-const views = ["home", "add", "generate", "quiz", "settings"];
+const views = ["home", "add", "generate", "quiz", "settings", "materials"];
 function showView(name) {
   for (const v of views) {
     document.getElementById(`view-${v}`).classList.toggle("hidden", v !== name);
@@ -324,9 +334,12 @@ async function renderFieldList() {
   listEl.innerHTML = Object.entries(byField)
     .map(
       ([field, c]) => `
-      <div class="field-group">
-        <div class="field-title">${escapeHtml(field)}</div>
-        <div class="field-counts">教材 ${c.teach}冊 ・ 過去問 ${c.past}冊</div>
+      <div class="field-group" data-field="${escapeHtml(field)}">
+        <div>
+          <div class="field-title">${escapeHtml(field)}</div>
+          <div class="field-counts">教材 ${c.teach}冊 ・ 過去問 ${c.past}冊</div>
+        </div>
+        <div class="chevron">›</div>
       </div>`
     )
     .join("");
@@ -344,6 +357,60 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
+}
+
+document.getElementById("field-list").addEventListener("click", (e) => {
+  const group = e.target.closest(".field-group");
+  if (!group) return;
+  openMaterialsView(group.dataset.field);
+});
+
+/* --- 資料一覧（分野別）・削除 --- */
+async function openMaterialsView(field) {
+  document.getElementById("materials-title").textContent = field;
+  await renderMaterialsForField(field);
+  showView("materials");
+}
+
+async function renderMaterialsForField(field) {
+  const all = await dbGetAll("materials");
+  const items = all.filter((m) => m.field === field);
+  const teach = items.filter((m) => m.type !== "past");
+  const past = items.filter((m) => m.type === "past");
+
+  renderMaterialGroup("materials-teach-list", teach);
+  renderMaterialGroup("materials-past-list", past);
+}
+
+function renderMaterialGroup(elId, items) {
+  const el = document.getElementById(elId);
+  if (items.length === 0) {
+    el.innerHTML = `<p class="material-empty">登録なし</p>`;
+    return;
+  }
+  el.innerHTML = items
+    .map(
+      (m) => `
+      <div class="material-item">
+        <div class="material-info">
+          <div class="material-name">${escapeHtml(m.title)}</div>
+          <div class="material-meta">${m.pages.length}ページ ・ ${new Date(m.createdAt).toLocaleDateString("ja-JP")}登録</div>
+        </div>
+        <button class="material-delete-btn" data-delete-id="${m.id}">削除</button>
+      </div>`
+    )
+    .join("");
+
+  el.querySelectorAll("[data-delete-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.deleteId);
+      if (!confirm("この資料を削除しますか？（取り込んだテキストも削除されます）")) return;
+      await dbDelete("materials", id);
+      const field = document.getElementById("materials-title").textContent;
+      await renderMaterialsForField(field);
+      await renderFieldList();
+    });
+  });
 }
 
 /* --- 教材・過去問の追加 --- */
