@@ -37,6 +37,7 @@
     <div class="section-block">
       <h2>学習</h2>
       <button id="btn-generate" class="btn btn-primary btn-full">📝 問題を作る</button>
+      <button id="btn-review" class="btn btn-secondary btn-full btn-spaced">🔁 復習する</button>
       <button id="btn-history" class="btn btn-secondary btn-full btn-spaced">📊 学習履歴</button>
     </div>
   </section>
@@ -108,6 +109,32 @@
       <p id="quiz-source" class="quiz-source"></p>
       <button id="btn-next-question" class="btn btn-primary btn-full">次の問題へ</button>
     </div>
+  </section>
+
+  <!-- 復習画面 -->
+  <section id="view-review" class="view hidden">
+    <button class="link-back" data-back>← 戻る</button>
+    <h2>復習する</h2>
+
+    <label class="field">
+      <span>分野</span>
+      <select id="review-field">
+        <option value="__all__">すべての分野</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>出題対象</span>
+      <select id="review-mode">
+        <option value="all">保存済みの問題すべて</option>
+        <option value="wrong">直近で間違えた問題だけ</option>
+        <option value="past">過去問だけ</option>
+      </select>
+    </label>
+
+    <p id="review-status" class="status-note"></p>
+
+    <button id="btn-review-start" class="btn btn-primary btn-full">この条件で復習を始める</button>
   </section>
 
   <!-- 学習履歴画面 -->

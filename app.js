@@ -366,7 +366,7 @@ async function generateQuestions({ field, count, includePast }) {
 /* ---------------------------------------------------------
  * 画面制御
  * --------------------------------------------------------- */
-const views = ["home", "add", "generate", "quiz", "settings", "materials", "history"];
+const views = ["home", "add", "generate", "quiz", "settings", "materials", "history", "review"];
 function showView(name) {
   for (const v of views) {
     document.getElementById(`view-${v}`).classList.toggle("hidden", v !== name);
@@ -505,6 +505,60 @@ async function renderHistory() {
     })
     .join("");
 }
+
+/* --- 復習（保存済み問題の再出題） --- */
+document.getElementById("btn-review").addEventListener("click", async () => {
+  await populateReviewFieldOptions();
+  document.getElementById("review-status").textContent = "";
+  showView("review");
+});
+
+async function populateReviewFieldOptions() {
+  const questions = await dbGetAll("questions");
+  const fields = [...new Set(questions.map((q) => q.field))];
+  const sel = document.getElementById("review-field");
+  sel.innerHTML =
+    `<option value="__all__">すべての分野</option>` +
+    fields.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("");
+}
+
+document.getElementById("btn-review-start").addEventListener("click", async () => {
+  const field = document.getElementById("review-field").value;
+  const mode = document.getElementById("review-mode").value;
+  const statusEl = document.getElementById("review-status");
+
+  const questions = await dbGetAll("questions");
+  const attempts = await dbGetAll("attempts");
+
+  // 各問題の直近の回答結果を調べる
+  const latestByQuestion = new Map();
+  for (const a of attempts) {
+    const prev = latestByQuestion.get(a.questionId);
+    if (!prev || new Date(a.answeredAt) > new Date(prev.answeredAt)) {
+      latestByQuestion.set(a.questionId, a);
+    }
+  }
+
+  let filtered = questions;
+  if (field !== "__all__") filtered = filtered.filter((q) => q.field === field);
+  if (mode === "wrong") {
+    filtered = filtered.filter((q) => {
+      const latest = latestByQuestion.get(q.id);
+      return latest && !latest.correct;
+    });
+  } else if (mode === "past") {
+    filtered = filtered.filter((q) => q.isPastExam);
+  }
+
+  if (filtered.length === 0) {
+    statusEl.textContent = "条件に合う問題がありません。条件を変えて試してください。";
+    return;
+  }
+
+  // 出題順をシャッフルし、多すぎる場合は20問までに絞る
+  const shuffled = [...filtered].sort(() => Math.random() - 0.5).slice(0, 20);
+  startQuiz(shuffled);
+});
 
 /* --- 資料一覧（分野別）・削除 --- */
 async function openMaterialsView(field) {
