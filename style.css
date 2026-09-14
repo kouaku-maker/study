@@ -51,6 +51,16 @@ body {
   margin: 0;
 }
 
+.offline-banner {
+  background: var(--wrong-soft);
+  color: var(--wrong);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px 20px;
+  text-align: center;
+}
+.offline-banner.hidden { display: none; }
+
 .icon-btn {
   border: none;
   background: none;

@@ -664,6 +664,11 @@ document.getElementById("btn-add-confirm").addEventListener("click", async () =>
   const statusEl = document.getElementById("add-status");
   const file = fileInput.files[0];
 
+  if (!navigator.onLine) {
+    statusEl.textContent = "オフラインのため、PDF取り込みはできません（PDF処理ライブラリの読み込みにネット接続が必要です）。";
+    return;
+  }
+
   if (!field || !title || !file) {
     statusEl.textContent = "分野・タイトル・PDFファイルをすべて入力してください。";
     return;
@@ -701,10 +706,14 @@ document.getElementById("btn-generate").addEventListener("click", async () => {
 });
 
 document.getElementById("btn-generate-confirm").addEventListener("click", async () => {
+  const statusEl = document.getElementById("gen-status");
+  if (!navigator.onLine) {
+    statusEl.textContent = "オフラインのため、AIでの問題生成はできません。ネット接続時にお試しください。";
+    return;
+  }
   const field = document.getElementById("gen-field").value;
   const count = Math.max(1, Math.min(20, Number(document.getElementById("gen-count").value) || 5));
   const includePast = document.getElementById("gen-include-past").checked;
-  const statusEl = document.getElementById("gen-status");
   const btn = document.getElementById("btn-generate-confirm");
 
   statusEl.textContent = "AIが問題を作成し、品質チェック中…（混雑時は自動で少し待って再試行するため、最大2分ほどかかることがあります）";
@@ -790,7 +799,15 @@ document.getElementById("btn-next-question").addEventListener("click", () => {
 (async function init() {
   await renderFieldList();
   showView("home");
+  updateOfflineBanner();
+  window.addEventListener("online", updateOfflineBanner);
+  window.addEventListener("offline", updateOfflineBanner);
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
 })();
+
+function updateOfflineBanner() {
+  const banner = document.getElementById("offline-banner");
+  banner.classList.toggle("hidden", navigator.onLine);
+}

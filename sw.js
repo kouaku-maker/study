@@ -1,8 +1,12 @@
 // CE Study AI - Service Worker（アプリ本体のオフラインキャッシュ）
 // 注意：Gemini APIへの問題生成リクエストはオフラインでは動作しません。
 // キャッシュ対象はアプリの見た目・動作に必要な静的ファイルのみです。
+//
+// 戦略：network-first（まずネットから最新版を取りに行き、
+// 取得できた場合はキャッシュを更新する。オフライン時のみキャッシュを使う）
+// これにより、アプリを更新したときに反映されやすくなる。
 
-const CACHE_NAME = "cestudy-cache-v1";
+const CACHE_NAME = "cestudy-cache-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -32,19 +36,15 @@ self.addEventListener("fetch", (event) => {
 
   // Gemini APIへのリクエストなど、他ドメインへの通信はキャッシュしない
   if (url.origin !== self.location.origin) return;
+  if (event.request.method !== "GET") return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return (
-        cached ||
-        fetch(event.request)
-          .then((res) => {
-            const resClone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
-            return res;
-          })
-          .catch(() => cached)
-      );
-    })
+    fetch(event.request)
+      .then((res) => {
+        const resClone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
