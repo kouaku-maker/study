@@ -234,12 +234,17 @@ function buildSourceExcerpts(materialsForField, maxChars) {
   return { excerpts: out, sourceLabels, entries };
 }
 
-function buildPrompt({ field, count, excerpts, includePast }) {
+function buildPrompt({ field, count, excerpts, includePast, masteredQuestions }) {
+  const masteredNote =
+    masteredQuestions && masteredQuestions.length > 0
+      ? `\n参考：以下は、ユーザーがすでに正解した問題文です。同じ内容を扱う場合でも、これらと全く同じ文面はできるだけ避け、問い方（聞かれる角度・具体例・形式など）を変えてください。ただし内容自体（分野・出典）が重複すること自体は問題ありません。\n${masteredQuestions.map((q) => `・${q}`).join("\n")}\n`
+      : "";
+
   return `あなたは臨床工学技士(CE)国家試験・認定試験対策の問題作成アシスタントです。
 以下は「${field}」分野の教材・過去問から抜粋したテキストです。各行の先頭に [出典:...] というタグが付いています。
 
 このタグ付きテキストだけを根拠として、4択問題を ${count} 問作成してください。
-
+${masteredNote}
 厳守事項：
 - 必ず与えられたテキストに書かれている内容のみを根拠にすること。テキストにない知識を勝手に補わない。
 - 各問題には、根拠にした [出典:...] の中身をそのまま source フィールドに書くこと。複数箇所を根拠にした場合は主要な1つを書く。
@@ -367,7 +372,26 @@ async function generateQuestions({ field, count, includePast }) {
   }
 
   const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, 60000);
-  const prompt = buildPrompt({ field, count, excerpts, includePast });
+
+  // すでに正解済みの問題は、AIに「同じ文面を繰り返さない」よう伝える
+  const existingQuestions = (await dbGetAll("questions")).filter((q) => q.field === field);
+  const attempts = await dbGetAll("attempts");
+  const latestByQuestion = new Map();
+  for (const a of attempts) {
+    const prev = latestByQuestion.get(a.questionId);
+    if (!prev || new Date(a.answeredAt) > new Date(prev.answeredAt)) {
+      latestByQuestion.set(a.questionId, a);
+    }
+  }
+  const masteredQuestions = existingQuestions
+    .filter((q) => {
+      const latest = latestByQuestion.get(q.id);
+      return latest && latest.correct;
+    })
+    .map((q) => q.question)
+    .slice(-100); // プロンプトが長くなりすぎないよう直近100問まで
+
+  const prompt = buildPrompt({ field, count, excerpts, includePast, masteredQuestions });
   const rawText = await callGemini(apiKey, prompt);
 
   let parsed;
