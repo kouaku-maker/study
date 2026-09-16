@@ -554,6 +554,7 @@ async function renderHistory() {
   const qMap = new Map(questions.map((q) => [q.id, q]));
 
   const byField = {};
+  const byTopic = {};
   let totalCorrect = 0;
   let total = 0;
 
@@ -563,6 +564,12 @@ async function renderHistory() {
     byField[field] = byField[field] || { correct: 0, total: 0 };
     byField[field].total++;
     if (a.correct) byField[field].correct++;
+
+    const topic = q && q.topic ? q.topic : "未分類";
+    byTopic[topic] = byTopic[topic] || { correct: 0, total: 0 };
+    byTopic[topic].total++;
+    if (a.correct) byTopic[topic].correct++;
+
     total++;
     if (a.correct) totalCorrect++;
   }
@@ -583,20 +590,32 @@ async function renderHistory() {
       <div class="stat-label">全体正答率</div>
     </div>`;
 
-  const listEl = document.getElementById("history-field-list");
-  const fields = Object.entries(byField);
-  if (fields.length === 0) {
-    listEl.innerHTML = `<p class="empty-note">まだ回答履歴がありません。問題に回答すると、ここに分野別の正答率が表示されます。</p>`;
+  renderRateList("history-field-list", byField, "まだ回答履歴がありません。問題に回答すると、ここに分野別の正答率が表示されます。");
+  renderRateList(
+    "history-topic-list",
+    byTopic,
+    "トピック情報を持つ問題への回答がまだありません。新しく生成した問題に回答すると表示されます。",
+    // 正答率が低い順に並べ、苦手なトピックが上に来るようにする
+    (entries) => entries.sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total)
+  );
+}
+
+function renderRateList(elId, statsObj, emptyMessage, sortFn) {
+  const listEl = document.getElementById(elId);
+  let entries = Object.entries(statsObj);
+  if (entries.length === 0) {
+    listEl.innerHTML = `<p class="empty-note">${emptyMessage}</p>`;
     return;
   }
+  if (sortFn) entries = sortFn(entries);
 
-  listEl.innerHTML = fields
-    .map(([field, c]) => {
+  listEl.innerHTML = entries
+    .map(([label, c]) => {
       const rate = c.total > 0 ? Math.round((c.correct / c.total) * 100) : 0;
       return `
       <div class="history-field-row">
         <div class="history-field-top">
-          <span>${escapeHtml(field)}</span>
+          <span>${escapeHtml(label)}</span>
           <span class="history-field-rate">${c.correct}/${c.total}（${rate}%）</span>
         </div>
         <div class="history-bar-track">
