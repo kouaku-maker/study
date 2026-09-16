@@ -256,6 +256,11 @@ h2 { font-size: 18px; margin: 4px 0 18px; }
   padding: 12px 14px;
 }
 
+.history-field-row-clickable {
+  cursor: pointer;
+}
+.history-field-row-clickable:active { background: var(--accent-soft); }
+
 .history-field-row .history-field-top {
   display: flex;
   justify-content: space-between;

@@ -480,7 +480,7 @@ async function generateQuestions({ field, count, includePast }) {
 /* ---------------------------------------------------------
  * 画面制御
  * --------------------------------------------------------- */
-const views = ["home", "add", "generate", "quiz", "settings", "materials", "history", "review"];
+const views = ["home", "add", "generate", "quiz", "settings", "materials", "history", "historyDetail", "review"];
 function showView(name) {
   for (const v of views) {
     document.getElementById(`view-${v}`).classList.toggle("hidden", v !== name);
@@ -489,6 +489,10 @@ function showView(name) {
 
 document.querySelectorAll("[data-back]").forEach((btn) => {
   btn.addEventListener("click", () => showView("home"));
+});
+
+document.querySelectorAll("[data-history-back]").forEach((btn) => {
+  btn.addEventListener("click", () => showView("history"));
 });
 
 document.getElementById("btn-settings").addEventListener("click", async () => {
@@ -570,7 +574,6 @@ async function renderHistory() {
   const qMap = new Map(questions.map((q) => [q.id, q]));
 
   const byField = {};
-  const byTopic = {};
   let totalCorrect = 0;
   let total = 0;
 
@@ -580,19 +583,55 @@ async function renderHistory() {
     byField[field] = byField[field] || { correct: 0, total: 0 };
     byField[field].total++;
     if (a.correct) byField[field].correct++;
-
-    const topicKey = topicGroupKey(q || {});
-    byTopic[topicKey] = byTopic[topicKey] || { correct: 0, total: 0 };
-    byTopic[topicKey].total++;
-    if (a.correct) byTopic[topicKey].correct++;
-
     total++;
     if (a.correct) totalCorrect++;
   }
 
-  const summaryEl = document.getElementById("history-summary");
-  const overallRate = total > 0 ? Math.round((totalCorrect / total) * 100) : 0;
-  summaryEl.innerHTML = `
+  renderSummary("history-summary", total, totalCorrect);
+  renderClickableRateList(
+    "history-field-list",
+    byField,
+    "まだ回答履歴がありません。問題に回答すると、ここに分野別の正答率が表示されます。",
+    openHistoryDetail
+  );
+}
+
+async function openHistoryDetail(field) {
+  document.getElementById("history-detail-title").textContent = field;
+
+  const attempts = await dbGetAll("attempts");
+  const questions = await dbGetAll("questions");
+  const qMap = new Map(questions.map((q) => [q.id, q]));
+
+  const byTopic = {};
+  let totalCorrect = 0;
+  let total = 0;
+
+  for (const a of attempts) {
+    const q = qMap.get(a.questionId);
+    if (!q || q.field !== field) continue;
+    const key = topicGroupKey(q);
+    byTopic[key] = byTopic[key] || { correct: 0, total: 0 };
+    byTopic[key].total++;
+    if (a.correct) byTopic[key].correct++;
+    total++;
+    if (a.correct) totalCorrect++;
+  }
+
+  renderSummary("history-detail-summary", total, totalCorrect);
+  renderRateList(
+    "history-detail-topic-list",
+    byTopic,
+    "この分野にはまだ回答履歴がありません。",
+    (entries) => entries.sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total)
+  );
+
+  showView("historyDetail");
+}
+
+function renderSummary(elId, total, totalCorrect) {
+  const rate = total > 0 ? Math.round((totalCorrect / total) * 100) : 0;
+  document.getElementById(elId).innerHTML = `
     <div class="stat">
       <div class="stat-value">${total}</div>
       <div class="stat-label">総回答数</div>
@@ -602,18 +641,9 @@ async function renderHistory() {
       <div class="stat-label">総正解数</div>
     </div>
     <div class="stat">
-      <div class="stat-value">${overallRate}%</div>
-      <div class="stat-label">全体正答率</div>
+      <div class="stat-value">${rate}%</div>
+      <div class="stat-label">正答率</div>
     </div>`;
-
-  renderRateList("history-field-list", byField, "まだ回答履歴がありません。問題に回答すると、ここに分野別の正答率が表示されます。");
-  renderRateList(
-    "history-topic-list",
-    byTopic,
-    "トピック情報を持つ問題への回答がまだありません。新しく生成した問題に回答すると表示されます。",
-    // 正答率が低い順に並べ、苦手なトピックが上に来るようにする
-    (entries) => entries.sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total)
-  );
 }
 
 function renderRateList(elId, statsObj, emptyMessage, sortFn) {
@@ -640,6 +670,36 @@ function renderRateList(elId, statsObj, emptyMessage, sortFn) {
       </div>`;
     })
     .join("");
+}
+
+/* 分野一覧のように、タップで詳細へ遷移できる正答率リスト */
+function renderClickableRateList(elId, statsObj, emptyMessage, onClickLabel) {
+  const listEl = document.getElementById(elId);
+  const entries = Object.entries(statsObj);
+  if (entries.length === 0) {
+    listEl.innerHTML = `<p class="empty-note">${emptyMessage}</p>`;
+    return;
+  }
+
+  listEl.innerHTML = entries
+    .map(([label, c]) => {
+      const rate = c.total > 0 ? Math.round((c.correct / c.total) * 100) : 0;
+      return `
+      <div class="history-field-row history-field-row-clickable" data-label="${escapeHtml(label)}">
+        <div class="history-field-top">
+          <span>${escapeHtml(label)}</span>
+          <span class="history-field-rate">${c.correct}/${c.total}（${rate}%）</span>
+        </div>
+        <div class="history-bar-track">
+          <div class="history-bar-fill" style="width:${rate}%"></div>
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  listEl.querySelectorAll("[data-label]").forEach((row) => {
+    row.addEventListener("click", () => onClickLabel(row.dataset.label));
+  });
 }
 
 /* --- 復習（保存済み問題の再出題） --- */

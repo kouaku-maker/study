@@ -142,7 +142,7 @@
     <button id="btn-review-start" class="btn btn-primary btn-full">この条件で復習を始める</button>
   </section>
 
-  <!-- 学習履歴画面 -->
+  <!-- 学習履歴画面（分野一覧） -->
   <section id="view-history" class="view hidden">
     <button class="link-back" data-back>← 戻る</button>
     <h2>学習履歴</h2>
@@ -153,10 +153,18 @@
       <h2>分野別正答率</h2>
       <div id="history-field-list" class="history-field-list"></div>
     </div>
+  </section>
+
+  <!-- 学習履歴画面（分野の詳細：トピック別） -->
+  <section id="view-historyDetail" class="view hidden">
+    <button class="link-back" data-history-back>← 学習履歴へ</button>
+    <h2 id="history-detail-title">分野の詳細</h2>
+
+    <div class="history-summary" id="history-detail-summary"></div>
 
     <div class="section-block">
       <h2>トピック別正答率</h2>
-      <div id="history-topic-list" class="history-field-list"></div>
+      <div id="history-detail-topic-list" class="history-field-list"></div>
     </div>
   </section>
 
