@@ -125,6 +125,24 @@ h2 { font-size: 18px; margin: 4px 0 18px; }
   border: 1px solid var(--line);
 }
 
+.btn-danger {
+  background: var(--wrong-soft);
+  color: var(--wrong);
+  border: 1px solid var(--wrong);
+}
+.btn-danger:active { background: var(--wrong); color: #fff; }
+
+.danger-zone {
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.danger-zone h2 {
+  font-size: 14px;
+  color: var(--wrong);
+  margin: 0 0 8px;
+}
+
 .field-list {
   display: flex;
   flex-direction: column;

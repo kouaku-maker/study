@@ -94,6 +94,16 @@ async function dbGetAll(store) {
   });
 }
 
+async function dbClear(store) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    const req = tx.objectStore(store).clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
 async function dbDelete(store, key) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -244,7 +254,7 @@ const QUESTION_ANGLES = [
   "過去問に類似した形式で問う"
 ];
 
-function buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics }) {
+function buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics, existingTopics }) {
   const masteredNote =
     masteredQuestions && masteredQuestions.length > 0
       ? `\n参考：以下は、ユーザーがすでに正解した問題文です。同じ内容を扱う場合でも、これらと全く同じ文面はできるだけ避け、問い方（聞かれる角度・具体例・形式など）を変えてください。ただし内容自体（分野・出典）が重複すること自体は問題ありません。\n${masteredQuestions.map((q) => `・${q}`).join("\n")}\n`
@@ -271,7 +281,7 @@ ${angleAssignment.map((a, i) => `  ${i + 1}問目：${a}`).join("\n")}
 - 必ず与えられたテキストに書かれている内容のみを根拠にすること。テキストにない知識を勝手に補わない。
 - 各問題には、根拠にした [出典:...] の中身をそのまま source フィールドに書くこと。複数箇所を根拠にした場合は主要な1つを書く。
 - 出典が特定できない問題は作らない。
-- 各問題に、内容を表す短いトピック名（例：「抗凝固療法」「穿刺・シャント管理」など、10文字程度）を topic フィールドに付けること。
+- 各問題に、内容を表す「大まかなカテゴリ」を topic フィールドに付けること。細かくしすぎないこと（例：「低分子ヘパリンの投与量」のような細かい粒度ではなく、「抗凝固療法」のような大分類にする）。目安として、この分野全体で5〜10種類程度のカテゴリに収まるようにし、似た内容の問題には同じtopic名を使い回すこと。${existingTopics && existingTopics.length > 0 ? `この分野で既に使われているトピック名は次の通り。内容が合致する場合は、新しい名前を作らずこれらをそのまま使うこと：${existingTopics.join("、")}` : ""}
 - ${includePast ? "過去問の抜粋がある場合、そのまま使う・一部改変する・類題を作る、すべて可とする。使った場合は isPastExam を true にする。" : "過去問の抜粋は出題傾向の参考のみに使い、そのままの引用はしない。isPastExam は常に false にする。"}
 - 選択肢は4つ、正解は1つ。誤答も医学的にもっともらしいものにする。
 - 出力は次のJSON配列の形式のみ。説明文やマークダウンは一切付けない。
@@ -447,7 +457,9 @@ async function generateQuestions({ field, count, includePast }) {
     .slice(0, 8)
     .map(([topic]) => topic);
 
-  const prompt = buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics });
+  const existingTopics = [...new Set(existingQuestions.map((q) => q.topic).filter(Boolean))].slice(0, 20);
+
+  const prompt = buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics, existingTopics });
   const rawText = await callGemini(apiKey, prompt);
 
   let parsed;
@@ -498,6 +510,7 @@ document.querySelectorAll("[data-history-back]").forEach((btn) => {
 document.getElementById("btn-settings").addEventListener("click", async () => {
   document.getElementById("settings-api-key").value = await getApiKey();
   document.getElementById("settings-model").value = await getGeminiModel();
+  document.getElementById("reset-status").textContent = "";
   showView("settings");
 });
 
@@ -507,6 +520,13 @@ document.getElementById("btn-save-key").addEventListener("click", async () => {
   await saveApiKey(key);
   await saveGeminiModel(model);
   showView("home");
+});
+
+document.getElementById("btn-reset-history").addEventListener("click", async () => {
+  const statusEl = document.getElementById("reset-status");
+  if (!confirm("学習履歴（回答記録）をすべて削除します。この操作は取り消せません。よろしいですか？")) return;
+  await dbClear("attempts");
+  statusEl.textContent = "学習履歴をリセットしました。";
 });
 
 /* --- ホーム画面：資料一覧の描画 --- */
