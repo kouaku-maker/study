@@ -369,12 +369,16 @@ async function verifyQuestions(apiKey, questions, entries) {
     question: q.question,
     correctChoice: q.choices[q.answerIndex],
     explanation: q.explanation,
+    currentTopic: q.topic || "",
     sourceExcerpt: attachSourceExcerpt(q, entries)
   }));
 
-  const prompt = `以下は自動生成された臨床工学技士試験対策の4択問題です。各問題について、添えられた「根拠原文」の内容と、問題文・正解・解説が事実として矛盾していないかを確認してください。
+  const prompt = `以下は自動生成された臨床工学技士試験対策の4択問題です。各問題について、2つのことを確認してください。
 
-判定基準（重要）：
+(1) 内容チェック：添えられた「根拠原文」の内容と、問題文・正解・解説が事実として矛盾していないか
+(2) トピックチェック：currentTopic（現在付けられているトピック名）が、実際のその問題の内容と一致しているか。一致していなければ、問題文の内容に合った正しいトピック名を correctedTopic に入れてください（一致していれば currentTopic と同じ値を correctedTopic に入れてください）。トピック名は大まかなカテゴリにし、他の問題と共通化できる場合はそちらを優先してください。
+
+内容チェックの判定基準：
 - 根拠原文に書かれている内容の範囲で、一般的な臨床工学の常識を使って説明を補っているだけなら ok とする（厳しくしすぎない）。
 - ng とするのは、根拠原文に書かれていない具体的な数値・固有名詞・手順を勝手に作り出している場合や、根拠原文の内容と明確に矛盾する場合のみ。
 - 判断に迷う場合は ok とする。
@@ -382,7 +386,7 @@ async function verifyQuestions(apiKey, questions, entries) {
 出力は次のJSON配列の形式のみ。ok の値は必ず true または false のブール値にすること。説明文やマークダウンは一切付けない。
 
 [
-  { "index": 0, "ok": true, "reason": "簡潔な理由" }
+  { "index": 0, "ok": true, "reason": "簡潔な理由", "correctedTopic": "トピック名" }
 ]
 
 --- チェック対象 ---
@@ -394,8 +398,15 @@ ${JSON.stringify(items, null, 0)}
     const rawText = await callGemini(apiKey, prompt);
     const results = JSON.parse(rawText) || [];
     const isOk = (v) => v === true || v === "true" || v === 1;
-    const okIndexes = new Set(results.filter((r) => r && isOk(r.ok)).map((r) => Number(r.index)));
-    const passed = questions.filter((_, i) => okIndexes.has(i));
+    const resultByIndex = new Map(results.map((r) => [Number(r.index), r]));
+
+    const passed = [];
+    questions.forEach((q, i) => {
+      const r = resultByIndex.get(i);
+      if (r && isOk(r.ok)) {
+        passed.push(r.correctedTopic ? { ...q, topic: r.correctedTopic } : q);
+      }
+    });
     const rejectedReasons = results
       .filter((r) => r && !isOk(r.ok))
       .map((r) => r.reason)
