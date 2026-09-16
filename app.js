@@ -234,21 +234,44 @@ function buildSourceExcerpts(materialsForField, maxChars) {
   return { excerpts: out, sourceLabels, entries };
 }
 
-function buildPrompt({ field, count, excerpts, includePast, masteredQuestions }) {
+const QUESTION_ANGLES = [
+  "定義・基本知識を問う",
+  "複数の概念や方式の比較を問う",
+  "数値・計算・基準値を問う",
+  "禁忌・注意点・トラブル対応を問う",
+  "手順・操作の順序を問う",
+  "症例（状況設定）に基づく判断を問う",
+  "過去問に類似した形式で問う"
+];
+
+function buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics }) {
   const masteredNote =
     masteredQuestions && masteredQuestions.length > 0
       ? `\n参考：以下は、ユーザーがすでに正解した問題文です。同じ内容を扱う場合でも、これらと全く同じ文面はできるだけ避け、問い方（聞かれる角度・具体例・形式など）を変えてください。ただし内容自体（分野・出典）が重複すること自体は問題ありません。\n${masteredQuestions.map((q) => `・${q}`).join("\n")}\n`
       : "";
 
+  const weakNote =
+    weakTopics && weakTopics.length > 0
+      ? `\n参考：このユーザーは以下のトピックで正答率が低く、苦手としています。資料の範囲内で構わないので、${count}問のうち半分以上は、これらのトピックに関連する内容を優先して出題してください。\n${weakTopics.map((t) => `・${t}`).join("\n")}\n`
+      : "";
+
+  // 問題数に応じて、問い方のパターンを割り当てる（多角的な出題にするため）
+  const angleAssignment = Array.from({ length: count }, (_, i) => QUESTION_ANGLES[i % QUESTION_ANGLES.length]);
+
   return `あなたは臨床工学技士(CE)国家試験・認定試験対策の問題作成アシスタントです。
 以下は「${field}」分野の教材・過去問から抜粋したテキストです。各行の先頭に [出典:...] というタグが付いています。
 
 このタグ付きテキストだけを根拠として、4択問題を ${count} 問作成してください。
-${masteredNote}
+${masteredNote}${weakNote}
+出題の多様化（重要）：
+- ${count}問それぞれに、以下の「問い方のパターン」を順番に割り当てて作成してください（資料の内容的にどうしても対応できない場合のみ別のパターンに変えて構いません）。同じような聞き方の問題ばかりにならないようにすること。
+${angleAssignment.map((a, i) => `  ${i + 1}問目：${a}`).join("\n")}
+
 厳守事項：
 - 必ず与えられたテキストに書かれている内容のみを根拠にすること。テキストにない知識を勝手に補わない。
 - 各問題には、根拠にした [出典:...] の中身をそのまま source フィールドに書くこと。複数箇所を根拠にした場合は主要な1つを書く。
 - 出典が特定できない問題は作らない。
+- 各問題に、内容を表す短いトピック名（例：「抗凝固療法」「穿刺・シャント管理」など、10文字程度）を topic フィールドに付けること。
 - ${includePast ? "過去問の抜粋がある場合、そのまま使う・一部改変する・類題を作る、すべて可とする。使った場合は isPastExam を true にする。" : "過去問の抜粋は出題傾向の参考のみに使い、そのままの引用はしない。isPastExam は常に false にする。"}
 - 選択肢は4つ、正解は1つ。誤答も医学的にもっともらしいものにする。
 - 出力は次のJSON配列の形式のみ。説明文やマークダウンは一切付けない。
@@ -260,6 +283,7 @@ ${masteredNote}
     "answerIndex": 0,
     "explanation": "なぜその答えになるかの解説",
     "source": "出典表記",
+    "topic": "トピック名",
     "isPastExam": false
   }
 ]
@@ -391,7 +415,23 @@ async function generateQuestions({ field, count, includePast }) {
     .map((q) => q.question)
     .slice(-100); // プロンプトが長くなりすぎないよう直近100問まで
 
-  const prompt = buildPrompt({ field, count, excerpts, includePast, masteredQuestions });
+  // トピック別の正答率を集計し、正答率が低い（かつある程度回答数がある）トピックを苦手分野とする
+  const topicStats = {};
+  for (const q of existingQuestions) {
+    if (!q.topic) continue;
+    const latest = latestByQuestion.get(q.id);
+    if (!latest) continue;
+    topicStats[q.topic] = topicStats[q.topic] || { correct: 0, total: 0 };
+    topicStats[q.topic].total++;
+    if (latest.correct) topicStats[q.topic].correct++;
+  }
+  const weakTopics = Object.entries(topicStats)
+    .filter(([, s]) => s.total >= 2 && s.correct / s.total < 0.7)
+    .sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total)
+    .slice(0, 8)
+    .map(([topic]) => topic);
+
+  const prompt = buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics });
   const rawText = await callGemini(apiKey, prompt);
 
   let parsed;
@@ -782,6 +822,7 @@ function renderCurrentQuestion() {
 
   const q = quizQueue[quizIndex];
   document.getElementById("quiz-progress").textContent = `${quizIndex + 1} / ${quizQueue.length} 問`;
+  document.getElementById("quiz-topic").textContent = q.topic || "";
   document.getElementById("quiz-question").textContent = q.question;
 
   const choicesEl = document.getElementById("quiz-choices");
