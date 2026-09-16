@@ -294,6 +294,21 @@ ${excerpts}
 `;
 }
 
+/* 出典表記（例："〇〇テキスト P.124" "〇〇過去問 問題頁12"）から資料タイトル部分だけを取り出す */
+function parseMaterialTitleFromSource(source) {
+  if (!source) return "";
+  return source.replace(/\s*(P\.\d+|問題頁\d+)\s*$/, "").trim();
+}
+
+/* 「資料タイトル＋トピック」で分類するためのキーを作る */
+function topicGroupKey(q) {
+  const docTitle = parseMaterialTitleFromSource(q.source);
+  if (docTitle && q.topic) return `${docTitle} ・ ${q.topic}`;
+  if (docTitle) return docTitle;
+  if (q.topic) return q.topic;
+  return "未分類";
+}
+
 /* 生成結果の機械チェック：出典が実在する資料のものかを確認 */
 function validateQuestions(rawQuestions, validSourceLabels) {
   const valid = [];
@@ -415,15 +430,16 @@ async function generateQuestions({ field, count, includePast }) {
     .map((q) => q.question)
     .slice(-100); // プロンプトが長くなりすぎないよう直近100問まで
 
-  // トピック別の正答率を集計し、正答率が低い（かつある程度回答数がある）トピックを苦手分野とする
+  // トピック別（資料タイトル＋トピック）の正答率を集計し、
+  // 正答率が低い（かつある程度回答数がある）ものを苦手分野とする
   const topicStats = {};
   for (const q of existingQuestions) {
-    if (!q.topic) continue;
     const latest = latestByQuestion.get(q.id);
     if (!latest) continue;
-    topicStats[q.topic] = topicStats[q.topic] || { correct: 0, total: 0 };
-    topicStats[q.topic].total++;
-    if (latest.correct) topicStats[q.topic].correct++;
+    const key = topicGroupKey(q);
+    topicStats[key] = topicStats[key] || { correct: 0, total: 0 };
+    topicStats[key].total++;
+    if (latest.correct) topicStats[key].correct++;
   }
   const weakTopics = Object.entries(topicStats)
     .filter(([, s]) => s.total >= 2 && s.correct / s.total < 0.7)
@@ -565,10 +581,10 @@ async function renderHistory() {
     byField[field].total++;
     if (a.correct) byField[field].correct++;
 
-    const topic = q && q.topic ? q.topic : "未分類";
-    byTopic[topic] = byTopic[topic] || { correct: 0, total: 0 };
-    byTopic[topic].total++;
-    if (a.correct) byTopic[topic].correct++;
+    const topicKey = topicGroupKey(q || {});
+    byTopic[topicKey] = byTopic[topicKey] || { correct: 0, total: 0 };
+    byTopic[topicKey].total++;
+    if (a.correct) byTopic[topicKey].correct++;
 
     total++;
     if (a.correct) totalCorrect++;
