@@ -272,7 +272,7 @@ const QUESTION_ANGLES = [
   "過去問に類似した形式で問う"
 ];
 
-function buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, existingTopics }) {
+function buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, overusedTopics, existingTopics }) {
   const recentNote =
     recentQuestions && recentQuestions.length > 0
       ? `\n参考：以下は、この分野で過去に出題済みの問題文です。できるだけこれらと同じ文面・同じ切り口を避け、資料の中でまだ扱われていない内容や、別の角度からの問いを優先してください。資料の範囲が狭く、内容が重複すること自体はやむを得ませんが、その場合は聞き方（角度・具体例・形式）を変えてください。\n${recentQuestions.map((q) => `・${q}`).join("\n")}\n`
@@ -283,6 +283,11 @@ function buildPrompt({ field, count, excerpts, includePast, recentQuestions, wea
       ? `\n参考：このユーザーは以下のトピックで正答率が低く、苦手としています。資料の範囲内で構わないので、${count}問のうち半分以上は、これらのトピックに関連する内容を優先して出題してください。\n${weakTopics.map((t) => `・${t}`).join("\n")}\n`
       : "";
 
+  const coverageNote =
+    overusedTopics && overusedTopics.length > 0
+      ? `\n参考：以下のトピックは、すでに何度も出題されています。資料が許す限り、これら以外の内容（まだ出題していないトピックや、資料の中でまだ触れていない箇所）を優先し、同じトピックへの偏りを避けてください。\n${overusedTopics.map((t) => `・${t}`).join("\n")}\n`
+      : "";
+
   // 問題数に応じて、問い方のパターンを割り当てる（多角的な出題にするため）
   const angleAssignment = Array.from({ length: count }, (_, i) => QUESTION_ANGLES[i % QUESTION_ANGLES.length]);
 
@@ -290,7 +295,7 @@ function buildPrompt({ field, count, excerpts, includePast, recentQuestions, wea
 以下は「${field}」分野の教材・過去問から抜粋したテキストです。各行の先頭に [出典:...] というタグが付いています。
 
 このタグ付きテキストだけを根拠として、4択問題を ${count} 問作成してください。
-${recentNote}${weakNote}
+${recentNote}${weakNote}${coverageNote}
 出題の多様化（重要）：
 - ${count}問それぞれに、以下の「問い方のパターン」を順番に割り当てて作成してください（資料の内容的にどうしても対応できない場合のみ別のパターンに変えて構いません）。同じような聞き方の問題ばかりにならないようにすること。
 ${angleAssignment.map((a, i) => `  ${i + 1}問目：${a}`).join("\n")}
@@ -490,9 +495,22 @@ async function generateQuestions({ field, count, includePast }) {
     .slice(0, 8)
     .map(([topic]) => topic);
 
+  // 出題回数が多い（偏っている）トピックを洗い出し、それ以外を優先させる
+  // （回答済みかどうかに関わらず、生成された問題の数そのものを数える）
+  const generationTopicCounts = {};
+  for (const q of existingQuestions) {
+    const key = topicGroupKey(q);
+    generationTopicCounts[key] = (generationTopicCounts[key] || 0) + 1;
+  }
+  const overusedTopics = Object.entries(generationTopicCounts)
+    .filter(([, n]) => n >= 3)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([topic]) => topic);
+
   const existingTopics = [...new Set(existingQuestions.map((q) => q.topic).filter(Boolean))].slice(0, 20);
 
-  const prompt = buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, existingTopics });
+  const prompt = buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, overusedTopics, existingTopics });
   const rawText = await callGemini(apiKey, prompt, 0.9);
 
   let parsed;
