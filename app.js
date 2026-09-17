@@ -169,7 +169,7 @@ async function extractPdfPages(file) {
  * --------------------------------------------------------- */
 const GEMINI_MODEL_DEFAULT = "gemini-3.6-flash";
 
-async function callGemini(apiKey, prompt, retriesLeft = 2) {
+async function callGemini(apiKey, prompt, temperature = 0.4, retriesLeft = 2) {
   const model = await getGeminiModel();
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -177,7 +177,7 @@ async function callGemini(apiKey, prompt, retriesLeft = 2) {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       responseMimeType: "application/json",
-      temperature: 0.4
+      temperature
     }
   };
   const res = await fetch(url, {
@@ -190,7 +190,7 @@ async function callGemini(apiKey, prompt, retriesLeft = 2) {
     // 1分あたりの回数制限（RPM）による一時的な混雑の可能性があるため、
     // 少し待ってから自動的に再試行する
     await new Promise((r) => setTimeout(r, 20000));
-    return callGemini(apiKey, prompt, retriesLeft - 1);
+    return callGemini(apiKey, prompt, temperature, retriesLeft - 1);
   }
 
   if (!res.ok) {
@@ -254,10 +254,10 @@ const QUESTION_ANGLES = [
   "過去問に類似した形式で問う"
 ];
 
-function buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics, existingTopics }) {
-  const masteredNote =
-    masteredQuestions && masteredQuestions.length > 0
-      ? `\n参考：以下は、ユーザーがすでに正解した問題文です。同じ内容を扱う場合でも、これらと全く同じ文面はできるだけ避け、問い方（聞かれる角度・具体例・形式など）を変えてください。ただし内容自体（分野・出典）が重複すること自体は問題ありません。\n${masteredQuestions.map((q) => `・${q}`).join("\n")}\n`
+function buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, existingTopics }) {
+  const recentNote =
+    recentQuestions && recentQuestions.length > 0
+      ? `\n参考：以下は、この分野で過去に出題済みの問題文です。できるだけこれらと同じ文面・同じ切り口を避け、資料の中でまだ扱われていない内容や、別の角度からの問いを優先してください。資料の範囲が狭く、内容が重複すること自体はやむを得ませんが、その場合は聞き方（角度・具体例・形式）を変えてください。\n${recentQuestions.map((q) => `・${q}`).join("\n")}\n`
       : "";
 
   const weakNote =
@@ -272,7 +272,7 @@ function buildPrompt({ field, count, excerpts, includePast, masteredQuestions, w
 以下は「${field}」分野の教材・過去問から抜粋したテキストです。各行の先頭に [出典:...] というタグが付いています。
 
 このタグ付きテキストだけを根拠として、4択問題を ${count} 問作成してください。
-${masteredNote}${weakNote}
+${recentNote}${weakNote}
 出題の多様化（重要）：
 - ${count}問それぞれに、以下の「問い方のパターン」を順番に割り当てて作成してください（資料の内容的にどうしても対応できない場合のみ別のパターンに変えて構いません）。同じような聞き方の問題ばかりにならないようにすること。
 ${angleAssignment.map((a, i) => `  ${i + 1}問目：${a}`).join("\n")}
@@ -431,7 +431,7 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("この分野に登録された資料がありません。");
   }
 
-  const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, 60000);
+  const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, 300000);
 
   // すでに正解済みの問題は、AIに「同じ文面を繰り返さない」よう伝える
   const existingQuestions = (await dbGetAll("questions")).filter((q) => q.field === field);
@@ -443,13 +443,10 @@ async function generateQuestions({ field, count, includePast }) {
       latestByQuestion.set(a.questionId, a);
     }
   }
-  const masteredQuestions = existingQuestions
-    .filter((q) => {
-      const latest = latestByQuestion.get(q.id);
-      return latest && latest.correct;
-    })
+  // 過去に出題済みの問題文（正解・不正解を問わず）をAIに伝え、内容の重複を避けさせる
+  const recentQuestions = existingQuestions
     .map((q) => q.question)
-    .slice(-100); // プロンプトが長くなりすぎないよう直近100問まで
+    .slice(-150); // プロンプトが長くなりすぎないよう直近150問まで
 
   // トピック別（資料タイトル＋トピック）の正答率を集計し、
   // 正答率が低い（かつある程度回答数がある）ものを苦手分野とする
@@ -470,8 +467,8 @@ async function generateQuestions({ field, count, includePast }) {
 
   const existingTopics = [...new Set(existingQuestions.map((q) => q.topic).filter(Boolean))].slice(0, 20);
 
-  const prompt = buildPrompt({ field, count, excerpts, includePast, masteredQuestions, weakTopics, existingTopics });
-  const rawText = await callGemini(apiKey, prompt);
+  const prompt = buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, existingTopics });
+  const rawText = await callGemini(apiKey, prompt, 0.9);
 
   let parsed;
   try {
