@@ -135,6 +135,14 @@ async function saveApiKey(key) {
   await dbPut("settings", { key: "geminiApiKey", value: key });
 }
 
+async function getPageCursor(field) {
+  const row = await dbGet("settings", `pageCursor:${field}`);
+  return row ? row.value : 0;
+}
+async function savePageCursor(field, value) {
+  await dbPut("settings", { key: `pageCursor:${field}`, value });
+}
+
 async function getGeminiModel() {
   const row = await dbGet("settings", "geminiModel");
   return row ? row.value : GEMINI_MODEL_DEFAULT;
@@ -208,11 +216,12 @@ async function callGemini(apiKey, prompt, temperature = 0.4, retriesLeft = 2) {
 }
 
 /* 出典タグ付きの教材抜粋を作成する（プロンプトに埋め込む素材）
- * 資料が多い場合、文字数上限(maxChars)ですべては渡しきれないため、
- * 毎回同じ（先頭の）ページばかりが使われないよう、ページの順序をシャッフルしてから詰め込む。
+ * 資料全体を毎回渡すと処理が重くなるため、前回の続き（startIndex）から
+ * 文字数上限(maxChars)に達するまでの分だけを渡す「ローテーション」方式にする。
+ * 生成を繰り返すことで、資料全体を少しずつ一巡してカバーできる。
  * entries には、後で「出典の中身と問題の内容が矛盾していないか」を
  * 照合するための { docTitle, label, text } を保持しておく */
-function buildSourceExcerpts(materialsForField, maxChars) {
+function buildSourceExcerpts(materialsForField, maxChars, startIndex = 0) {
   const allPages = [];
   for (const m of materialsForField) {
     for (const p of m.pages) {
@@ -220,28 +229,37 @@ function buildSourceExcerpts(materialsForField, maxChars) {
       allPages.push({ m, p });
     }
   }
-  // Fisher-Yatesシャッフル
-  for (let i = allPages.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [allPages[i], allPages[j]] = [allPages[j], allPages[i]];
+  const total = allPages.length;
+  if (total === 0) {
+    return { excerpts: "", sourceLabels: [], entries: [], nextIndex: 0 };
   }
 
   let out = "";
   const sourceLabels = [];
   const entries = [];
-  for (const { m, p } of allPages) {
+  let idx = startIndex % total;
+  let scanned = 0;
+
+  while (scanned < total) {
+    const { m, p } = allPages[idx];
     const label =
       m.type === "past"
         ? `[出典:${m.title} 問題頁${p.page}]`
         : `[出典:${m.title} P.${p.page}]`;
     const chunk = `${label} ${p.text}\n`;
-    if (out.length + chunk.length > maxChars) continue;
+
+    if (out.length > 0 && out.length + chunk.length > maxChars) break; // 上限に達したらそこで止める
+
     out += chunk;
     const labelBody = label.slice(4, -1); // "出典:" と "]" を除いたラベル本体
     sourceLabels.push(labelBody);
     entries.push({ docTitle: m.title, page: p.page, label: labelBody, text: p.text });
+
+    idx = (idx + 1) % total;
+    scanned++;
   }
-  return { excerpts: out, sourceLabels, entries };
+
+  return { excerpts: out, sourceLabels, entries, nextIndex: idx };
 }
 
 const QUESTION_ANGLES = [
@@ -431,7 +449,14 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("この分野に登録された資料がありません。");
   }
 
-  const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, Infinity);
+  const PAGE_BUDGET_CHARS = 80000; // 1回の生成で渡す資料の文字数の目安（速度と網羅性のバランス）
+  const cursor = await getPageCursor(field);
+  const { excerpts, sourceLabels, entries, nextIndex } = buildSourceExcerpts(
+    materialsForField,
+    PAGE_BUDGET_CHARS,
+    cursor
+  );
+  await savePageCursor(field, nextIndex);
 
   // すでに正解済みの問題は、AIに「同じ文面を繰り返さない」よう伝える
   const existingQuestions = (await dbGetAll("questions")).filter((q) => q.field === field);
