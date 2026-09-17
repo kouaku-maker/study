@@ -431,7 +431,7 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("この分野に登録された資料がありません。");
   }
 
-  const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, 300000);
+  const { excerpts, sourceLabels, entries } = buildSourceExcerpts(materialsForField, Infinity);
 
   // すでに正解済みの問題は、AIに「同じ文面を繰り返さない」よう伝える
   const existingQuestions = (await dbGetAll("questions")).filter((q) => q.field === field);
