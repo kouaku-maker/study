@@ -135,14 +135,6 @@ async function saveApiKey(key) {
   await dbPut("settings", { key: "geminiApiKey", value: key });
 }
 
-async function getPageCursor(field) {
-  const row = await dbGet("settings", `pageCursor:${field}`);
-  return row ? row.value : 0;
-}
-async function savePageCursor(field, value) {
-  await dbPut("settings", { key: `pageCursor:${field}`, value });
-}
-
 async function getGeminiModel() {
   const row = await dbGet("settings", "geminiModel");
   return row ? row.value : GEMINI_MODEL_DEFAULT;
@@ -215,51 +207,42 @@ async function callGemini(apiKey, prompt, temperature = 0.4, retriesLeft = 2) {
   return text;
 }
 
-/* 出典タグ付きの教材抜粋を作成する（プロンプトに埋め込む素材）
- * 資料全体を毎回渡すと処理が重くなるため、前回の続き（startIndex）から
- * 文字数上限(maxChars)に達するまでの分だけを渡す「ローテーション」方式にする。
- * 生成を繰り返すことで、資料全体を少しずつ一巡してカバーできる。
- * entries には、後で「出典の中身と問題の内容が矛盾していないか」を
- * 照合するための { docTitle, label, text } を保持しておく */
-function buildSourceExcerpts(materialsForField, maxChars, startIndex = 0) {
-  const allPages = [];
+/* 分野内の全ページを { docTitle, page, type, label, text } の形でフラットな配列にする */
+function buildAllPages(materialsForField) {
+  const pages = [];
   for (const m of materialsForField) {
     for (const p of m.pages) {
       if (!p.text) continue;
-      allPages.push({ m, p });
+      const label = m.type === "past" ? `${m.title} 問題頁${p.page}` : `${m.title} P.${p.page}`;
+      pages.push({ docTitle: m.title, page: p.page, type: m.type, label, text: p.text });
     }
   }
-  const total = allPages.length;
-  if (total === 0) {
-    return { excerpts: "", sourceLabels: [], entries: [], nextIndex: 0 };
+  return pages;
+}
+
+/* 生成する問題数ぶんだけ、根拠ページを1問1ページで割り当てる。
+ * AIに大きな資料をまとめて渡して「うまく分散して」と頼んでも、
+ * 結局目立つ内容に偏りがちなため、こちら側で強制的にページを分散させる。
+ * これまであまり使われていない（出題回数が少ない）ページを優先することで、
+ * 資料全体をまんべんなくカバーできるようにする。 */
+function selectAssignments(pages, count, existingQuestions) {
+  if (pages.length === 0) return [];
+
+  const usage = new Map(pages.map((pg) => [pg.label, 0]));
+  for (const q of existingQuestions) {
+    if (!q.source) continue;
+    const hit = pages.find((pg) => q.source.includes(pg.label));
+    if (hit) usage.set(hit.label, (usage.get(hit.label) || 0) + 1);
   }
 
-  let out = "";
-  const sourceLabels = [];
-  const entries = [];
-  let idx = startIndex % total;
-  let scanned = 0;
+  const withUsage = pages.map((pg) => ({ ...pg, _usage: usage.get(pg.label) || 0, _r: Math.random() }));
+  withUsage.sort((a, b) => a._usage - b._usage || a._r - b._r);
 
-  while (scanned < total) {
-    const { m, p } = allPages[idx];
-    const label =
-      m.type === "past"
-        ? `[出典:${m.title} 問題頁${p.page}]`
-        : `[出典:${m.title} P.${p.page}]`;
-    const chunk = `${label} ${p.text}\n`;
-
-    if (out.length > 0 && out.length + chunk.length > maxChars) break; // 上限に達したらそこで止める
-
-    out += chunk;
-    const labelBody = label.slice(4, -1); // "出典:" と "]" を除いたラベル本体
-    sourceLabels.push(labelBody);
-    entries.push({ docTitle: m.title, page: p.page, label: labelBody, text: p.text });
-
-    idx = (idx + 1) % total;
-    scanned++;
+  const selected = [];
+  for (let i = 0; i < count; i++) {
+    selected.push(withUsage[i % withUsage.length]);
   }
-
-  return { excerpts: out, sourceLabels, entries, nextIndex: idx };
+  return selected;
 }
 
 const QUESTION_ANGLES = [
@@ -272,42 +255,47 @@ const QUESTION_ANGLES = [
   "過去問に類似した形式で問う"
 ];
 
-function buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, overusedTopics, existingTopics }) {
+function buildPrompt({ field, includePast, assignments, recentQuestions, weakTopics, existingTopics }) {
   const recentNote =
     recentQuestions && recentQuestions.length > 0
-      ? `\n参考：以下は、この分野で過去に出題済みの問題文です。できるだけこれらと同じ文面・同じ切り口を避け、資料の中でまだ扱われていない内容や、別の角度からの問いを優先してください。資料の範囲が狭く、内容が重複すること自体はやむを得ませんが、その場合は聞き方（角度・具体例・形式）を変えてください。\n${recentQuestions.map((q) => `・${q}`).join("\n")}\n`
+      ? `\n参考：以下は、この分野で過去に出題済みの問題文です。同じ根拠ページを使う場合でも、できるだけこれらと同じ文面・同じ切り口は避けてください。\n${recentQuestions.map((q) => `・${q}`).join("\n")}\n`
       : "";
 
   const weakNote =
     weakTopics && weakTopics.length > 0
-      ? `\n参考：このユーザーは以下のトピックで正答率が低く、苦手としています。資料の範囲内で構わないので、${count}問のうち半分以上は、これらのトピックに関連する内容を優先して出題してください。\n${weakTopics.map((t) => `・${t}`).join("\n")}\n`
+      ? `\n参考：このユーザーは以下のトピックで正答率が低く、苦手としています。該当する根拠ページがあれば、そこでは特に理解度を問うような問題にしてください。\n${weakTopics.map((t) => `・${t}`).join("\n")}\n`
       : "";
 
-  const coverageNote =
-    overusedTopics && overusedTopics.length > 0
-      ? `\n参考：以下のトピックは、すでに何度も出題されています。資料が許す限り、これら以外の内容（まだ出題していないトピックや、資料の中でまだ触れていない箇所）を優先し、同じトピックへの偏りを避けてください。\n${overusedTopics.map((t) => `・${t}`).join("\n")}\n`
+  const existingTopicsNote =
+    existingTopics && existingTopics.length > 0
+      ? `この分野で既に使われているトピック名は次の通り。内容が合致する場合は、新しい名前を作らずこれらをそのまま使うこと：${existingTopics.join("、")}`
       : "";
 
-  // 問題数に応じて、問い方のパターンを割り当てる（多角的な出題にするため）
-  const angleAssignment = Array.from({ length: count }, (_, i) => QUESTION_ANGLES[i % QUESTION_ANGLES.length]);
+  // 1問につき1ページを厳密に割り当てる。AIに「分散させて」と頼むのではなく、
+  // こちら側で根拠ページを固定することで、内容の偏りを構造的に防ぐ。
+  const sections = assignments
+    .map(
+      (a, i) => `【${i + 1}問目の指定】
+問い方のパターン：${a.angle}
+根拠（この内容だけを根拠にすること。他の知識で補わないこと）：
+[出典:${a.label}]
+${a.text}
+`
+    )
+    .join("\n");
 
   return `あなたは臨床工学技士(CE)国家試験・認定試験対策の問題作成アシスタントです。
-以下は「${field}」分野の教材・過去問から抜粋したテキストです。各行の先頭に [出典:...] というタグが付いています。
+「${field}」分野の4択問題を、以下の指定に従って ${assignments.length} 問作成してください。
 
-このタグ付きテキストだけを根拠として、4択問題を ${count} 問作成してください。
-${recentNote}${weakNote}${coverageNote}
-出題の多様化（重要）：
-- ${count}問それぞれに、以下の「問い方のパターン」を順番に割り当てて作成してください（資料の内容的にどうしても対応できない場合のみ別のパターンに変えて構いません）。同じような聞き方の問題ばかりにならないようにすること。
-${angleAssignment.map((a, i) => `  ${i + 1}問目：${a}`).join("\n")}
-
+重要：各問題は、対応する番号の「根拠」に書かれている内容だけを根拠にすること。他の問題の根拠や、一般知識を混ぜないこと。これにより、問題ごとに扱う内容が自然に分散します。
+${recentNote}${weakNote}
 厳守事項：
-- 必ず与えられたテキストに書かれている内容のみを根拠にすること。テキストにない知識を勝手に補わない。
-- 各問題には、根拠にした [出典:...] の中身をそのまま source フィールドに書くこと。複数箇所を根拠にした場合は主要な1つを書く。
-- 出典が特定できない問題は作らない。
-- 各問題に、内容を表す「大まかなカテゴリ」を topic フィールドに付けること。細かくしすぎないこと（例：「低分子ヘパリンの投与量」のような細かい粒度ではなく、「抗凝固療法」のような大分類にする）。目安として、この分野全体で5〜10種類程度のカテゴリに収まるようにし、似た内容の問題には同じtopic名を使い回すこと。${existingTopics && existingTopics.length > 0 ? `この分野で既に使われているトピック名は次の通り。内容が合致する場合は、新しい名前を作らずこれらをそのまま使うこと：${existingTopics.join("、")}` : ""}
-- ${includePast ? "過去問の抜粋がある場合、そのまま使う・一部改変する・類題を作る、すべて可とする。使った場合は isPastExam を true にする。" : "過去問の抜粋は出題傾向の参考のみに使い、そのままの引用はしない。isPastExam は常に false にする。"}
+- 必ず対応する根拠に書かれている内容のみを使うこと。根拠にない知識を勝手に補わない。
+- source フィールドには、対応する [出典:...] の中身をそのまま書くこと（例："${assignments[0] ? assignments[0].label : "〇〇テキスト P.12"}"）。
+- 各問題に、内容を表す「大まかなカテゴリ」を topic フィールドに付けること。細かくしすぎないこと（例：「低分子ヘパリンの投与量」のような細かい粒度ではなく、「抗凝固療法」のような大分類にする）。${existingTopicsNote}
+- ${includePast ? "根拠が過去問からの抜粋の場合、そのまま使う・一部改変する・類題を作る、すべて可とする。その場合 isPastExam を true にする。" : "isPastExam は常に false にする。"}
 - 選択肢は4つ、正解は1つ。誤答も医学的にもっともらしいものにする。
-- 出力は次のJSON配列の形式のみ。説明文やマークダウンは一切付けない。
+- 出力は、指定した順番のまま、次のJSON配列の形式のみで${assignments.length}問分を出力すること。説明文やマークダウンは一切付けない。
 
 [
   {
@@ -321,9 +309,9 @@ ${angleAssignment.map((a, i) => `  ${i + 1}問目：${a}`).join("\n")}
   }
 ]
 
---- 資料抜粋 ---
-${excerpts}
---- 資料抜粋ここまで ---
+--- 各問題の指定 ---
+${sections}
+--- 各問題の指定ここまで ---
 `;
 }
 
@@ -342,49 +330,39 @@ function topicGroupKey(q) {
   return "未分類";
 }
 
-/* 生成結果の機械チェック：出典が実在する資料のものかを確認 */
-function validateQuestions(rawQuestions, validSourceLabels) {
+/* 生成結果の機械チェック：JSON形式が正しいかを確認し、
+ * 出典・isPastExamは「AIの自己申告」ではなく、こちらが割り当てた根拠ページの情報で上書きする
+ * （AIの記載ゆれを避け、常に正確な出典にするため）。
+ * 検証用に、対応する根拠ページの原文を _groundingText として一時的に持たせる。 */
+function validateQuestions(rawQuestions, assignments) {
   const valid = [];
-  for (const q of rawQuestions || []) {
+  (rawQuestions || []).forEach((q, i) => {
+    const a = assignments[i];
+    if (!a) return; // 想定数を超えた分は無視
     if (
       !q.question ||
       !Array.isArray(q.choices) ||
       q.choices.length !== 4 ||
       typeof q.answerIndex !== "number" ||
       q.answerIndex < 0 ||
-      q.answerIndex > 3 ||
-      !q.source
+      q.answerIndex > 3
     ) {
-      continue; // 形式不正はスキップ
+      return; // 形式不正はスキップ
     }
-    const sourceOk = validSourceLabels.some((label) => q.source.includes(label.split(" ")[0]));
-    if (!sourceOk) continue; // 出典が資料に存在しない場合はスキップ（品質チェック）
-    valid.push(q);
-  }
+    valid.push({
+      ...q,
+      source: a.label,
+      isPastExam: a.type === "past" ? Boolean(q.isPastExam) : false,
+      _groundingText: a.text
+    });
+  });
   return valid;
-}
-
-/* 問題ごとに、根拠となった出典の本文（原文）を探して付与する。
- * まず出典表記からページ番号を読み取り、そのページの原文を優先的に使う。
- * ページ番号が読み取れない場合のみ、同じ資料名の中身をまとめて渡す（フォールバック）。 */
-function attachSourceExcerpt(q, entries) {
-  const pageMatch = q.source.match(/(?:P\.|頁)(\d+)/);
-  const docMatches = entries.filter((e) => q.source.includes(e.docTitle.split(" ")[0]));
-
-  if (pageMatch) {
-    const pageNum = Number(pageMatch[1]);
-    const exact = docMatches.find((e) => e.page === pageNum);
-    if (exact) return exact.text.slice(0, 4000);
-  }
-
-  const text = docMatches.map((e) => e.text).join("\n").slice(0, 4000);
-  return text || "(該当する原文が見つかりませんでした)";
 }
 
 /* AIによる整合性チェック：出典本文と問題内容が食い違っていないかを再度AIに確認させる。
  * 通信エラー等でチェック自体が失敗した場合は、出典実在チェック済みのリストをそのまま返す
  * （品質チェックが動かないことでMVPが完全に止まらないようにするため） */
-async function verifyQuestions(apiKey, questions, entries) {
+async function verifyQuestions(apiKey, questions) {
   if (questions.length === 0) return { passed: questions, rejectedReasons: [] };
 
   const items = questions.map((q, i) => ({
@@ -393,7 +371,7 @@ async function verifyQuestions(apiKey, questions, entries) {
     correctChoice: q.choices[q.answerIndex],
     explanation: q.explanation,
     currentTopic: q.topic || "",
-    sourceExcerpt: attachSourceExcerpt(q, entries)
+    sourceExcerpt: (q._groundingText || "").slice(0, 4000)
   }));
 
   const prompt = `以下は自動生成された臨床工学技士試験対策の4択問題です。各問題について、2つのことを確認してください。
@@ -427,7 +405,8 @@ ${JSON.stringify(items, null, 0)}
     questions.forEach((q, i) => {
       const r = resultByIndex.get(i);
       if (r && isOk(r.ok)) {
-        passed.push(r.correctedTopic ? { ...q, topic: r.correctedTopic } : q);
+        const { _groundingText, ...clean } = q;
+        passed.push(r.correctedTopic ? { ...clean, topic: r.correctedTopic } : clean);
       }
     });
     const rejectedReasons = results
@@ -438,7 +417,7 @@ ${JSON.stringify(items, null, 0)}
     return { passed, rejectedReasons };
   } catch (e) {
     console.error("整合性チェックに失敗したため、このステップをスキップします", e);
-    return { passed: questions, rejectedReasons: [] };
+    return { passed: questions.map(({ _groundingText, ...clean }) => clean), rejectedReasons: [] };
   }
 }
 
@@ -454,16 +433,11 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("この分野に登録された資料がありません。");
   }
 
-  const PAGE_BUDGET_CHARS = 80000; // 1回の生成で渡す資料の文字数の目安（速度と網羅性のバランス）
-  const cursor = await getPageCursor(field);
-  const { excerpts, sourceLabels, entries, nextIndex } = buildSourceExcerpts(
-    materialsForField,
-    PAGE_BUDGET_CHARS,
-    cursor
-  );
-  await savePageCursor(field, nextIndex);
+  const allPages = buildAllPages(materialsForField);
+  if (allPages.length === 0) {
+    throw new Error("この分野の資料からテキストを取得できませんでした。");
+  }
 
-  // すでに正解済みの問題は、AIに「同じ文面を繰り返さない」よう伝える
   const existingQuestions = (await dbGetAll("questions")).filter((q) => q.field === field);
   const attempts = await dbGetAll("attempts");
   const latestByQuestion = new Map();
@@ -473,10 +447,15 @@ async function generateQuestions({ field, count, includePast }) {
       latestByQuestion.set(a.questionId, a);
     }
   }
-  // 過去に出題済みの問題文（正解・不正解を問わず）をAIに伝え、内容の重複を避けさせる
-  const recentQuestions = existingQuestions
-    .map((q) => q.question)
-    .slice(-150); // プロンプトが長くなりすぎないよう直近150問まで
+
+  // 1問1ページで根拠を厳密に割り当てる（出題回数が少ないページを優先）
+  const assignments = selectAssignments(allPages, count, existingQuestions).map((a, i) => ({
+    ...a,
+    angle: QUESTION_ANGLES[i % QUESTION_ANGLES.length]
+  }));
+
+  // 過去に出題済みの問題文（正解・不正解を問わず）をAIに伝え、文面の重複を避けさせる
+  const recentQuestions = existingQuestions.map((q) => q.question).slice(-150);
 
   // トピック別（資料タイトル＋トピック）の正答率を集計し、
   // 正答率が低い（かつある程度回答数がある）ものを苦手分野とする
@@ -495,22 +474,9 @@ async function generateQuestions({ field, count, includePast }) {
     .slice(0, 8)
     .map(([topic]) => topic);
 
-  // 出題回数が多い（偏っている）トピックを洗い出し、それ以外を優先させる
-  // （回答済みかどうかに関わらず、生成された問題の数そのものを数える）
-  const generationTopicCounts = {};
-  for (const q of existingQuestions) {
-    const key = topicGroupKey(q);
-    generationTopicCounts[key] = (generationTopicCounts[key] || 0) + 1;
-  }
-  const overusedTopics = Object.entries(generationTopicCounts)
-    .filter(([, n]) => n >= 3)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([topic]) => topic);
-
   const existingTopics = [...new Set(existingQuestions.map((q) => q.topic).filter(Boolean))].slice(0, 20);
 
-  const prompt = buildPrompt({ field, count, excerpts, includePast, recentQuestions, weakTopics, overusedTopics, existingTopics });
+  const prompt = buildPrompt({ field, includePast, assignments, recentQuestions, weakTopics, existingTopics });
   const rawText = await callGemini(apiKey, prompt, 0.9);
 
   let parsed;
@@ -520,12 +486,12 @@ async function generateQuestions({ field, count, includePast }) {
     throw new Error("AIの応答を解析できませんでした。もう一度お試しください。");
   }
 
-  const validated = validateQuestions(parsed, sourceLabels);
+  const validated = validateQuestions(parsed, assignments);
   if (validated.length === 0) {
-    throw new Error("出典が確認できる問題を生成できませんでした。資料を増やして再度お試しください。");
+    throw new Error("問題を生成できませんでした。もう一度お試しください。");
   }
 
-  const { passed, rejectedReasons } = await verifyQuestions(apiKey, validated, entries);
+  const { passed, rejectedReasons } = await verifyQuestions(apiKey, validated);
   if (passed.length === 0) {
     const reasonNote = rejectedReasons.length ? `（理由例：${rejectedReasons.join(" / ")}）` : "";
     throw new Error(`品質チェックで内容の矛盾が見つかり、有効な問題がありませんでした${reasonNote}`);
